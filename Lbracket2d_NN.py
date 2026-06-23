@@ -20,7 +20,7 @@ prob = Problem()
 # 1 = Minimize volume, Constraint: max stress
 # 2 = Minimize max stress, Constraint: volume
 # 3 = Minimize volume, Constraint: local ALM stress
-run_mode = 1
+run_mode = 0
 prob.opt.options.max_iter = 200 # Longer run for projection check
 # Objective and Constraints
 if run_mode == 1:
@@ -53,20 +53,20 @@ elif run_mode == 3:
     prob.opt.functions.objective_scale = 20
     prob.opt.functions.constraint_scale = 1.0
     prob.opt.options.move_limit = 0.05
-# NN Hyperparameters
-prob.opt.nn_params.hidden_dim = 32
-prob.opt.nn_params.num_layers = 8
+# =================================
+# ------- NN Hyperparameters ------
+prob.opt.nn_params.hidden_dim = 8
+prob.opt.nn_params.num_layers = 16
 prob.opt.nn_params.vol_penal_min = 1
 prob.opt.nn_params.vol_penal_max = 20
-prob.opt.nn_params.activation = 'ReLU' 
+prob.opt.nn_params.activation = 'ReLU'
 prob.opt.nn_params.fourier_scale = 1.0
-# To use Fourier Features (default)
+# =================================
 prob.opt.nn_params.use_fourier = 1
 prob.opt.nn_params.feature_type =  'fourier' # 'positional' or 'fourier'
-prob.opt.nn_params.learning_rate = 0.008 # 0.005, 0.008
+prob.opt.nn_params.learning_rate = 0.005 # 0.005, 0.008
 prob.opt.nn_params.optimizer_type = 'Adam'   #  Adam SGD
-
-# Mesh
+# =================================
 prob.fe.mesh_input.type = '2DLbracket'
 prob.fe.mesh_input.L_side = 100.0
 prob.fe.mesh_input.L_cutout = 60.0
@@ -75,47 +75,32 @@ prob.opt.options.move_limit = 0.05  # Move limit
 # Material
 prob.fe.material.E = 1.0 # Young's modulus
 prob.fe.material.nu = 0.3 # Poisson's ratio
-
 # Valid keys: 'p-norm', 'mrf'
 prob.opt.parameters.aggregation_type = 'p-norm'
 prob.opt.parameters.aggregation_parameter = 12
 # Adaptive Constraint Scaling (ACS) should be used with P-norm
 prob.opt.parameters.ACS.use = True if run_mode == 1 else False
-
 # Projection Settings
 prob.opt.parameters.projection.use = False
 prob.opt.parameters.projection.type = 'heaviside'
 prob.opt.parameters.projection.eta = 0.5
 prob.opt.parameters.projection.beta_init = 1.0
 prob.opt.parameters.projection.beta_final = 30.0
-
 # Optim Params
 prob.opt.parameters.penalization_param = 3.0
 prob.opt.parameters.filter_radius_factor = 1
-
 prob.opt.stress_needed = 1 if run_mode in [1, 2, 3] else 0 # Enable stress calculation check
 prob.opt.parameters.slimit = 2.4 # Stress limit
 prob.opt.parameters.init_dens = 0.5 # Initial density
-           
 # Output Settings
-
 prob.opt.options.plot = True
 prob.opt.options.show_plot = True
 # Optim Params
 prob.opt.parameters.penalization_param = 3.0
 prob.opt.parameters.slimit = 2.4 
-
 solver = FEMSolver(prob)
-prob.solver = solver # Link solver to problem for FunctionEvaluator usage
-
-# Setup BCs via init_FE hook
+prob.solver = solver 
 prob.fe.mesh_input.bcs_file = 'setup_lbracket_bcs'
-# Use init_FE
 solver.init_FE()
-# No explicit density filter is needed for NN (Implicit filtering via smooth function)
-
-# Initialize Optimizer
 optimizer = Optimizer_Neural(prob)
-
-# Run Optimization
 optimizer.optimization_loop() 

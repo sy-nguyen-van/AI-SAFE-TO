@@ -28,12 +28,7 @@ class Optimizer_local: # Optimizer class
         self.lambda_cons = np.zeros(n_cons)
         self.mu_cons = np.full(n_cons, getattr(self.opt.parameters, 'vol_penal_min', 1.0))
         
-    def _update_penalty(self, epoch, max_iter):
-        params = self.opt.parameters
-        t = epoch / (max_iter - 1) if max_iter > 1 else 1.0
-        min_p = getattr(params, 'vol_penal_min', 1.0)
-        max_p = getattr(params, 'vol_penal_max', 20.0)
-        self.mu_cons[:] = min_p + (max_p - min_p) * t
+    # (Removed linear penalty update _update_penalty to follow PolyStress adaptive ALM logic)
     def init_filter(self): # Initialize filter calculations
         if self.opt.H is not None: # If filter matrix is already initialized
             self.H = self.opt.H
@@ -175,7 +170,6 @@ class Optimizer_local: # Optimizer class
         
         # Initial Evaluation
         iter_k = 0        
-        self._update_penalty(iter_k, opt.options.max_iter)
         # Evaluate
         f0val, df0dx, fval, dfdx, x_phys, u = self._evaluate_all(x)        
         # Print Initial
@@ -299,15 +293,59 @@ class Optimizer_local: # Optimizer class
             x = xmma.flatten()
             opt.dv = x # Update in struct
             # Update Eval
-            self._update_penalty(iter_k, opt.options.max_iter)
             f0val, df0dx, fval, dfdx, x_phys, u = self._evaluate_all(x)           
             
-            # Update Lagrange Multipliers for ALM
-            for i, c_type in enumerate(opt.parameters.constraint_types):
-                mu = self.mu_cons[i]
-                if c_type == 'local_stress':
-                    if hasattr(opt, 'lam_local') and hasattr(opt, 'local_h_e'):
-                        opt.lam_local = np.maximum(0.0, opt.lam_local + mu * opt.local_h_e)
+            # ---------------------------------------------
+            # PolyStress ALM Adaptive Updates (Outer Iteration)
+            # ---------------------------------------------
+            alm_update_interval = 10 # Default for MMA if not specified
+            if hasattr(opt, 'nn_params'):
+                alm_update_interval = getattr(opt.nn_params, 'alm_update_interval', 10)
+            
+            if iter_k % alm_update_interval == 0:
+                tau = 0.5
+                gamma = 1.5
+                mu_max = getattr(opt.parameters, 'vol_penal_max', 20.0)
+                
+                for i, c_type in enumerate(opt.parameters.constraint_types):
+                    if c_type == 'local_stress':
+                        if hasattr(opt, 'local_h_e') and hasattr(opt, 'mu_local') and hasattr(opt, 'lam_local'):
+                            # Element-wise violation v_e
+                            v_e = np.maximum(0.0, opt.local_h_e)
+                            
+                            # Initialize previous violations if first update
+                            if not hasattr(opt, 'v_prev_local'):
+                                opt.v_prev_local = v_e.copy()
+                                
+                            # Find elements where violation did NOT decrease sufficiently
+                            bad_convergence = (v_e > tau * opt.v_prev_local) & (v_e > 1e-6)
+                            
+                            # Increase mu_e for those elements
+                            opt.mu_local[bad_convergence] = np.minimum(mu_max, gamma * opt.mu_local[bad_convergence])
+                            
+                            # Update lambda_e for all elements
+                            opt.lam_local = np.maximum(0.0, opt.lam_local + opt.mu_local * opt.local_h_e)
+                            
+                            # Save current violation for next check
+                            opt.v_prev_local = v_e.copy()
+                    else:
+                        # Standard global ALM constraints
+                        scale_i = (opt.functions.constraint_scale[i]
+                                   if isinstance(opt.functions.constraint_scale, (list, tuple, np.ndarray))
+                                   else opt.functions.constraint_scale)
+                        scaled_c_val = fval[i] * scale_i
+                        v_i = max(0.0, scaled_c_val)
+                        
+                        if not hasattr(opt, 'v_prev_global'):
+                            opt.v_prev_global = np.zeros(len(opt.parameters.constraint_types))
+                            
+                        # If violation didn't decrease enough
+                        if v_i > tau * opt.v_prev_global[i] and v_i > 1e-6:
+                            self.mu_cons[i] = min(mu_max, gamma * self.mu_cons[i])
+                            
+                        # Update global multiplier
+                        self.lambda_cons[i] = max(0.0, self.lambda_cons[i] + self.mu_cons[i] * scaled_c_val)
+                        opt.v_prev_global[i] = v_i
             
             # KKT Check
             # Reshape for kktcheck

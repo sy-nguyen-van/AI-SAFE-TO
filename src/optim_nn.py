@@ -302,10 +302,7 @@ class Optimizer_Neural:
         beta_max = params.projection.beta_final
         
         for epoch in range(opt.options.max_iter):
-            # ---------------------------------------------
-            # Update penalty weight μ linearly
-            # ---------------------------------------------
-            self._update_penalty(epoch, opt.options.max_iter)
+            # (Removed linear penalty update to follow PolyStress adaptive ALM logic)
             
             # Projection Continuation (Beta Update)
             if params.projection.use:                
@@ -329,9 +326,11 @@ class Optimizer_Neural:
                 if opt.stress_needed == 1:
                     self.obj0 = 1.0
 
-            # Inject objective term into autograd
+            # Inject objective term into autograd with normalization
+            # Scale is divided by the initial objective value (obj0) to balance the gradients
+            norm_scale = opt.functions.objective_scale / (abs(self.obj0) + 1e-12)
             loss_obj = self._create_external_tensor(
-                rho_tensor, f0val, df0drho, scale=opt.functions.objective_scale
+                rho_tensor, f0val, df0drho, scale=norm_scale
             )
             loss = loss_obj
 
@@ -362,28 +361,60 @@ class Optimizer_Neural:
             # ---------------------------------------------
             #  Backpropagate & optimize NN weights
             # ---------------------------------------------
+            self.optimizer.zero_grad()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=1.0)
             self.optimizer.step()
             self.scheduler.step()       # optional — could update every 20 iters
 
             # ---------------------------------------------
-            # Update Lagrange Multipliers (end of epoch)
+            # PolyStress ALM Adaptive Updates (Outer Iteration)
             # ---------------------------------------------
-            for i, c_type in enumerate(opt.parameters.constraint_types):
-                mu = self.mu_cons[i]
-                if c_type == 'local_stress':
-                    # Update the local element-wise multipliers
-                    if hasattr(opt, 'lam_local') and hasattr(opt, 'local_h_e'):
-                        opt.lam_local = np.maximum(0.0, opt.lam_local + mu * opt.local_h_e)
-                else:
-                    scale_i = (opt.functions.constraint_scale[i]
-                               if isinstance(opt.functions.constraint_scale, (list, tuple, np.ndarray))
-                               else opt.functions.constraint_scale)
-                    scaled_c_val = fval[i] * scale_i
-                    
-                    # Update multiplier (clamp to >= 0 for inequalities)
-                    self.lambda_cons[i] = max(0.0, self.lambda_cons[i] + mu * scaled_c_val)
+            alm_update_interval = getattr(opt.nn_params, 'alm_update_interval', 10)
+            if (epoch + 1) % alm_update_interval == 0:
+                tau = 0.5
+                gamma = 1.5
+                mu_max = opt.nn_params.vol_penal_max
+                
+                for i, c_type in enumerate(opt.parameters.constraint_types):
+                    if c_type == 'local_stress':
+                        if hasattr(opt, 'local_h_e') and hasattr(opt, 'mu_local') and hasattr(opt, 'lam_local'):
+                            # Element-wise violation v_e
+                            v_e = np.maximum(0.0, opt.local_h_e)
+                            
+                            # Initialize previous violations if first update
+                            if not hasattr(opt, 'v_prev_local'):
+                                opt.v_prev_local = v_e.copy()
+                                
+                            # Find elements where violation did NOT decrease sufficiently
+                            bad_convergence = (v_e > tau * opt.v_prev_local) & (v_e > 1e-6)
+                            
+                            # Increase mu_e for those elements
+                            opt.mu_local[bad_convergence] = np.minimum(mu_max, gamma * opt.mu_local[bad_convergence])
+                            
+                            # Update lambda_e for all elements
+                            opt.lam_local = np.maximum(0.0, opt.lam_local + opt.mu_local * opt.local_h_e)
+                            
+                            # Save current violation for next check
+                            opt.v_prev_local = v_e.copy()
+                    else:
+                        # Standard global ALM constraints (like volume)
+                        scale_i = (opt.functions.constraint_scale[i]
+                                   if isinstance(opt.functions.constraint_scale, (list, tuple, np.ndarray))
+                                   else opt.functions.constraint_scale)
+                        scaled_c_val = fval[i] * scale_i
+                        v_i = max(0.0, scaled_c_val)
+                        
+                        if not hasattr(opt, 'v_prev_global'):
+                            opt.v_prev_global = np.zeros(len(opt.parameters.constraint_types))
+                            
+                        # If violation didn't decrease enough
+                        if v_i > tau * opt.v_prev_global[i] and v_i > 1e-6:
+                            self.mu_cons[i] = min(mu_max, gamma * self.mu_cons[i])
+                            
+                        # Update global multiplier
+                        self.lambda_cons[i] = max(0.0, self.lambda_cons[i] + self.mu_cons[i] * scaled_c_val)
+                        opt.v_prev_global[i] = v_i
 
             # Print progress
             print(

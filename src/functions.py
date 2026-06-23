@@ -251,14 +251,20 @@ class FunctionEvaluator: # FunctionEvaluator class
             
         lam_local = self.opt.lam_local
         
+        # Initialize local ALM penalties if they don't exist
+        if not hasattr(self.opt, 'mu_local') or self.opt.mu_local is None:
+            self.opt.mu_local = np.full(h.shape, mu)
+            
+        mu_local = self.opt.mu_local
+        
         # Store for the optimizer to update at the end of the epoch
         self.opt.local_h_e = h.copy()
         
-        # Local active constraint: c_e = max(0, lambda_e + mu * h_e)
-        c_e = np.maximum(0.0, lam_local + mu * h)
+        # Local active constraint: c_e = max(0, lambda_e + mu_e * h_e)
+        c_e = np.maximum(0.0, lam_local + mu_local * h)
         
-        # Scalar Penalty: P = sum(1/(2*mu) * (c_e^2 - lambda_e^2))
-        P_AL = np.sum((c_e**2 - lam_local**2) / (2.0 * mu))
+        # Scalar Penalty: P = sum(1/(2*mu_e) * (c_e^2 - lambda_e^2))
+        P_AL = np.sum((c_e**2 - lam_local**2) / (2.0 * mu_local))
         
         # Derivative of P_AL w.r.t h_e is exactly c_e
         dP_dh = c_e

@@ -69,6 +69,20 @@ class SirenActivation(nn.Module):
 
 
 # =============================================================================
+# Residual Block for MLP
+# =============================================================================
+class ResidualBlock(nn.Module):
+    def __init__(self, hidden_dim, activation):
+        super().__init__()
+        self.linear = nn.Linear(hidden_dim, hidden_dim)
+        self.activation = activation
+        
+    def forward(self, x):
+        # Skip connection: x + Activation(Linear(x))
+        return x + self.activation(self.linear(x))
+
+
+# =============================================================================
 # Density Prediction Neural Network
 # =============================================================================
 class DensityNetwork(nn.Module):
@@ -109,22 +123,22 @@ class DensityNetwork(nn.Module):
 
         
         # -------- Input Layer --------
-        layers = []
-        layers.append(nn.Linear(current_dim, hidden_dim))
-        layers.append(self._get_activation(activation))
+        self.input_layer = nn.Sequential(
+            nn.Linear(current_dim, hidden_dim),
+            self._get_activation(activation)
+        )
 
-        # -------- Hidden Layers --------
+        # -------- Hidden Layers (Residual) --------
+        res_layers = []
         for _ in range(num_layers - 1):
-            layers.append(nn.Linear(hidden_dim, hidden_dim))
-            layers.append(self._get_activation(activation))
+            res_layers.append(ResidualBlock(hidden_dim, self._get_activation(activation)))
+        self.hidden_layers = nn.Sequential(*res_layers)
 
         # -------- Output Layer --------
-        layers.append(nn.Linear(hidden_dim, 1))
-        # Sigmoid ensures density value in [0,1]
-        layers.append(nn.Sigmoid())
-
-        # Combine all into sequential model
-        self.net = nn.Sequential(*layers)
+        self.output_layer = nn.Sequential(
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()
+        )
 
         # Initialize weights properly based on activation type
         self._init_weights(activation)
@@ -156,7 +170,7 @@ class DensityNetwork(nn.Module):
         ReLU → Kaiming initialization
         SIREN → Uniform init for sinusoidal networks
         """
-        for m in self.net.modules():
+        for m in self.modules():
             if isinstance(m, nn.Linear):
                 if act.lower() == 'siren':
                     # Recommended initialization for SIREN
@@ -182,11 +196,11 @@ class DensityNetwork(nn.Module):
         Returns:
             density values (N*1) in [0,1]
         """
-
-
         # Apply Feature Embedding if used
         if self.embedder is not None:
             x = self.embedder(x)
 
-        # Pass through neural network
-        return self.net(x)
+        # Pass through neural network with residual connections
+        x = self.input_layer(x)
+        x = self.hidden_layers(x)
+        return self.output_layer(x)
