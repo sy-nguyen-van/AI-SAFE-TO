@@ -358,15 +358,14 @@ class Optimizer_Neural:
             #  Constraint contributions
             # ---------------------------------------------
             constraint_status = []
-            if getattr(opt.nn_params, 'use_tounn_logic', False):
-                # TOuNN calculates volume natively in PyTorch
-                target_vol = params.target_volume if hasattr(params, 'target_volume') else 0.5
-                volConstraint = (torch.mean(rho_tensor) / target_vol) - 1.0
-                loss += tounn_alpha * torch.pow(volConstraint, 2)
-                tounn_alpha = min(tounn_alpha_max, tounn_alpha + tounn_alpha_inc)
-                constraint_status.append(f"VolViol={volConstraint.item():+.4f}")
-            else:
-                for i, c_type in enumerate(opt.parameters.constraint_types):
+            for i, c_type in enumerate(opt.parameters.constraint_types):
+                if c_type == 'volume' and getattr(opt.nn_params, 'use_tounn_logic', False):
+                    # TOuNN calculates volume natively in PyTorch
+                    target_vol = params.target_volume if hasattr(params, 'target_volume') else 0.5
+                    volConstraint = (torch.mean(rho_tensor) / target_vol) - 1.0
+                    loss += tounn_alpha * torch.pow(volConstraint, 2)
+                    constraint_status.append(f"VolViol={volConstraint.item():+.4f}")
+                else:
                     scale_i = (opt.functions.constraint_scale[i]
                                if isinstance(opt.functions.constraint_scale, (list, tuple, np.ndarray))
                                else opt.functions.constraint_scale)
@@ -385,6 +384,9 @@ class Optimizer_Neural:
                         active_constraint = torch.relu(lam + mu * fval_tensor)
                         penalty = (active_constraint**2 - lam**2) / (2.0 * mu)             
                         loss += penalty
+            
+            if getattr(opt.nn_params, 'use_tounn_logic', False):
+                tounn_alpha = min(tounn_alpha_max, tounn_alpha + tounn_alpha_inc)
 
             # ---------------------------------------------
             #  Backpropagate & optimize NN weights
