@@ -106,6 +106,77 @@ def setup_lbracket_bcs(problem):
     fe.n_loads = 1
 
 
+def setup_cantilever2d_bcs(problem):
+    """
+    Sets up BCs for 2D Cantilever Beam matching TOuNN (TipCantilever).
+    """
+    fe = problem.fe
+    coords = fe.coords # (N, 2)
+    from .struct_prob import BC_Struct
+    fe.BC = BC_Struct()
+    
+    x = coords[:, 0]
+    y = coords[:, 1]
+    
+    L = np.max(x)
+    
+    tol = 1e-6
+    
+    # L_edge: Left Edge (Fixed)
+    L_edge = np.where(x < tol)[0]
+    
+    # Load Case 1
+    fe.nloads = 1
+    
+    # Tip Cantilever: Load at bottom right corner (x=L, y=0)
+    load_region1 = np.where((x > L - tol) & (y < tol))[0]
+    
+    if len(load_region1) > 0:
+        load_mag1 = -1.0 # TOuNN uses -1
+        load_dir1 = 2 # y-direction
+        
+        n_force = len(load_region1)
+        fe.BC.n_pre_force_dofs = n_force
+        fe.BC.force_node = load_region1
+        fe.BC.force_dof = np.full(n_force, load_dir1, dtype=int)
+        fe.BC.force_value = np.full(n_force, load_mag1 / n_force)
+        fe.BC.force_id = np.full(n_force, 1, dtype=int)
+    else:
+        fe.BC.n_pre_force_dofs = 0
+        fe.BC.force_node = np.array([], dtype=int)
+        fe.BC.force_dof = np.array([], dtype=int)
+        fe.BC.force_value = np.array([])
+        fe.BC.force_id = np.array([], dtype=int)
+        print("Warning: No load nodes found for 2D Cantilever.")
+
+    # Displacement BCs
+    disp_region = L_edge
+    n_disp_pts = len(disp_region)
+    
+    # Constrain X (1) and Y (2)
+    bc_nodes = np.tile(disp_region, 2)
+    bc_dirs = np.concatenate([np.ones(n_disp_pts, dtype=int), 2 * np.ones(n_disp_pts, dtype=int)])
+    bc_mags = np.zeros(2 * n_disp_pts)
+    
+    fe.BC.n_pre_disp_dofs = len(bc_nodes)
+    fe.BC.disp_node = bc_nodes
+    fe.BC.disp_dof = bc_dirs
+    fe.BC.disp_value = bc_mags
+    
+    # Initialize global force vector
+    n_dof = fe.n_node * fe.dim
+    F = np.zeros(n_dof)
+    
+    if fe.BC.n_pre_force_dofs > 0:
+        offsets = fe.BC.force_dof - 1
+        indices = 2 * fe.BC.force_node + offsets
+        values = fe.BC.force_value
+        np.add.at(F, indices, values)
+        
+    fe.F = F
+    fe.n_loads = 1
+
+
 def setup_cantilever3d_bcs(problem):
     """
     Sets up BCs for 3D Cantilever Beam matching MatlabMRF/input_files/cantilever3d/COMP.

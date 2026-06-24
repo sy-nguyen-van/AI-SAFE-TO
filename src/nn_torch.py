@@ -204,3 +204,44 @@ class DensityNetwork(nn.Module):
         x = self.input_layer(x)
         x = self.hidden_layers(x)
         return self.output_layer(x)
+
+# =============================================================================
+# TOuNN Architecture
+# =============================================================================
+class TOuNN_Network(nn.Module):
+    """
+    Exact implementation of the TopNet architecture from TOuNN.
+    - No positional/Fourier embeddings
+    - Uses Batch Normalization
+    - Uses LeakyReLU
+    - Output bounds restricted to [0.01, 1.00] approx. (0.01 + 0.99*sigmoid)
+    """
+    def __init__(self, input_dim=2, hidden_dim=64, num_layers=4):
+        super().__init__()
+        self.inputDim = input_dim
+        self.outputDim = 1
+        self.layers = nn.ModuleList()
+        
+        current_dim = self.inputDim
+        for lyr in range(num_layers):
+            l = nn.Linear(current_dim, hidden_dim)
+            nn.init.xavier_normal_(l.weight)
+            nn.init.zeros_(l.bias)
+            self.layers.append(l)
+            current_dim = hidden_dim
+            
+        self.layers.append(nn.Linear(current_dim, self.outputDim))
+        
+        self.bnLayer = nn.ModuleList()
+        for lyr in range(num_layers):
+            self.bnLayer.append(nn.BatchNorm1d(hidden_dim))
+            
+    def forward(self, x):
+        m = nn.LeakyReLU()
+        ctr = 0
+        for layer in self.layers[:-1]:
+            x = m(self.bnLayer[ctr](layer(x)))
+            ctr += 1
+        # TOuNN uses: 0.01 + torch.sigmoid(x)
+        rho = 0.01 + torch.sigmoid(self.layers[-1](x)).view(-1)
+        return rho

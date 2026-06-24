@@ -48,6 +48,9 @@ class FEMSolver: # FEMSolver class
              elif bcs == 'setup_lbracket_bcs': # L-bracket BCS
                   from .setup_bcs import setup_lbracket_bcs # Import setup_lbracket_bcs
                   setup_lbracket_bcs(self.problem) # Call setup_lbracket_bcs
+             elif bcs == 'setup_cantilever2d_bcs':
+                  from .setup_bcs import setup_cantilever2d_bcs
+                  setup_cantilever2d_bcs(self.problem)
              else:
                   print(f"Warning: bcs_file '{bcs}' not recognized or actionable in init_FE.")
         

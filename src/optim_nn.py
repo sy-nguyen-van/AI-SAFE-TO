@@ -16,7 +16,7 @@ from .struct_prob import Problem
 from .utils import compute_filter_matrix, plot_density, plot_stress, plot_history, compute_heaviside_projection
 from .functions import FunctionEvaluator
 from .fem import FEMSolver # Import FEMSolver
-from .nn_torch import DensityNetwork
+from .nn_torch import DensityNetwork, TOuNN_Network
 # =============================================================================
 # External Gradient → Autograd Bridge
 # =============================================================================
@@ -101,15 +101,22 @@ class Optimizer_Neural:
         # -----------------------------
         nn_cfg = problem.opt.nn_params
         if network is None:            
-            self.net = DensityNetwork(
-                input_dim=self.fe.dim,
-                hidden_dim=nn_cfg.hidden_dim,
-                num_layers=nn_cfg.num_layers,
-                activation=nn_cfg.activation,
-                use_fourier=getattr(nn_cfg, "use_fourier", False),
-                fourier_scale=getattr(nn_cfg, "fourier_scale", 10.0),
-                feature_type=getattr(nn_cfg, "feature_type", 'fourier'),
-            )
+            if getattr(nn_cfg, 'use_tounn_logic', False):
+                self.net = TOuNN_Network(
+                    input_dim=self.fe.dim,
+                    hidden_dim=nn_cfg.hidden_dim,
+                    num_layers=nn_cfg.num_layers
+                )
+            else:
+                self.net = DensityNetwork(
+                    input_dim=self.fe.dim,
+                    hidden_dim=nn_cfg.hidden_dim,
+                    num_layers=nn_cfg.num_layers,
+                    activation=nn_cfg.activation,
+                    use_fourier=getattr(nn_cfg, "use_fourier", False),
+                    fourier_scale=getattr(nn_cfg, "fourier_scale", 10.0),
+                    feature_type=getattr(nn_cfg, "feature_type", 'fourier'),
+                )
         else:
             self.net = network
 
@@ -127,9 +134,12 @@ class Optimizer_Neural:
         centroids = self._compute_centroids()
 
         # Normalize domain to [-1,1] range
-        min_c = np.min(self.fe.coords, axis=0)
-        max_c = np.max(self.fe.coords, axis=0)
-        self.centroids_norm = 2.0 * (centroids - min_c) / (max_c - min_c) - 1.0
+        if getattr(nn_cfg, 'use_tounn_logic', False):
+            self.centroids_norm = centroids
+        else:
+            min_c = np.min(self.fe.coords, axis=0)
+            max_c = np.max(self.fe.coords, axis=0)
+            self.centroids_norm = 2.0 * (centroids - min_c) / (max_c - min_c) - 1.0
 
         # Tensor used at every iteration (no grad needed)
         self.centroids_tensor = torch.tensor(
@@ -301,6 +311,16 @@ class Optimizer_Neural:
         beta_min = params.projection.beta_init
         beta_max = params.projection.beta_final
         
+        # TOuNN logic initialization
+        if getattr(opt.nn_params, 'use_tounn_logic', False):
+            tounn_alpha = 0.1
+            tounn_alpha_inc = 0.05
+            tounn_alpha_max = 100.0
+            # TOuNN penalization continuation
+            params.penalization_param = 2.0
+            tounn_penal_inc = 0.01
+            tounn_penal_max = 4.0
+        
         for epoch in range(opt.options.max_iter):
             # (Removed linear penalty update to follow PolyStress adaptive ALM logic)
             
@@ -338,34 +358,49 @@ class Optimizer_Neural:
             #  Constraint contributions
             # ---------------------------------------------
             constraint_status = []
-            for i, c_type in enumerate(opt.parameters.constraint_types):
-                scale_i = (opt.functions.constraint_scale[i]
-                           if isinstance(opt.functions.constraint_scale, (list, tuple, np.ndarray))
-                           else opt.functions.constraint_scale)
-
-                fval_tensor = self._create_external_tensor(rho_tensor, fval[i], dfdx[i], scale_i)
-                constraint_status.append(f"ConsViol={fval[i]:+.4f}")
-                mu = self.mu_cons[i]
-                lam = self.lambda_cons[i]
-
-                if c_type == 'local_stress':
-                    # fval_tensor is ALREADY the fully computed local ALM penalty P_AL.
-                    # Add it directly to PyTorch loss (it carries its own FEM gradients)
-                    loss += fval_tensor
-                else:
-                    # Inequality Augmented Lagrangian: L = 1/(2μ) * (max(0, λ + μ*fval)^2 - λ^2)
-                    active_constraint = torch.relu(lam + mu * fval_tensor)
-                    penalty = (active_constraint**2 - lam**2) / (2.0 * mu)             
-                    loss += penalty
+            if getattr(opt.nn_params, 'use_tounn_logic', False):
+                # TOuNN calculates volume natively in PyTorch
+                target_vol = params.target_volume if hasattr(params, 'target_volume') else 0.5
+                volConstraint = (torch.mean(rho_tensor) / target_vol) - 1.0
+                loss += tounn_alpha * torch.pow(volConstraint, 2)
+                tounn_alpha = min(tounn_alpha_max, tounn_alpha + tounn_alpha_inc)
+                constraint_status.append(f"VolViol={volConstraint.item():+.4f}")
+            else:
+                for i, c_type in enumerate(opt.parameters.constraint_types):
+                    scale_i = (opt.functions.constraint_scale[i]
+                               if isinstance(opt.functions.constraint_scale, (list, tuple, np.ndarray))
+                               else opt.functions.constraint_scale)
+    
+                    fval_tensor = self._create_external_tensor(rho_tensor, fval[i], dfdx[i], scale_i)
+                    constraint_status.append(f"ConsViol={fval[i]:+.4f}")
+                    mu = self.mu_cons[i]
+                    lam = self.lambda_cons[i]
+    
+                    if c_type == 'local_stress':
+                        # fval_tensor is ALREADY the fully computed local ALM penalty P_AL.
+                        # Add it directly to PyTorch loss (it carries its own FEM gradients)
+                        loss += fval_tensor
+                    else:
+                        # Inequality Augmented Lagrangian: L = 1/(2μ) * (max(0, λ + μ*fval)^2 - λ^2)
+                        active_constraint = torch.relu(lam + mu * fval_tensor)
+                        penalty = (active_constraint**2 - lam**2) / (2.0 * mu)             
+                        loss += penalty
 
             # ---------------------------------------------
             #  Backpropagate & optimize NN weights
             # ---------------------------------------------
             self.optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=1.0)
+            if getattr(opt.nn_params, 'use_tounn_logic', False):
+                torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=0.1)
+            else:
+                torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=1.0)
             self.optimizer.step()
             self.scheduler.step()       # optional — could update every 20 iters
+            
+            # TOuNN penalization continuation update
+            if getattr(opt.nn_params, 'use_tounn_logic', False):
+                params.penalization_param = min(tounn_penal_max, params.penalization_param + tounn_penal_inc)
 
             # ---------------------------------------------
             # PolyStress ALM Adaptive Updates (Outer Iteration)
@@ -434,7 +469,11 @@ class Optimizer_Neural:
             self.history['grf'].append(grf)
 
             # Iterative Plotting
-            plot_density(self.fe.coords, self.fe.elem_node, x_phys, 
+            if getattr(opt.nn_params, 'use_tounn_logic', False):
+                x_plot = x_phys ** params.penalization_param
+            else:
+                x_plot = x_phys
+            plot_density(self.fe.coords, self.fe.elem_node, x_plot, 
             os.path.join(out_dir, 'NN_density_iter.png'), show=True, title=f"Iteration {epoch}")
             
         # Save Final Density Plot
@@ -447,7 +486,12 @@ class Optimizer_Neural:
         relaxed_stress = self.fe.svm.flatten()
         vol_frac,_ = self.evaluator.compute_volume_fraction(rho_np)
         
-        plot_density(self.fe.coords, self.fe.elem_node, x_phys, 
+        if getattr(opt.nn_params, 'use_tounn_logic', False):
+            x_plot = x_phys ** params.penalization_param
+        else:
+            x_plot = x_phys
+        
+        plot_density(self.fe.coords, self.fe.elem_node, x_plot, 
                     filename=os.path.join(out_dir, 'NN_density.png'), 
                     show=False, title=f'NN; $v_f = {vol_frac:.2f}$',
                     H=self.opt.H, penal=self.opt.parameters.penalization_param)
