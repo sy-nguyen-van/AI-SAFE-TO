@@ -20,7 +20,7 @@ prob = Problem()
 # 1 = Minimize volume, Constraint: max stress
 # 2 = Minimize max stress, Constraint: volume
 # 3 = Minimize volume, Constraint: local ALM stress
-run_mode = 0
+run_mode = 1
 prob.opt.options.max_iter = 200 # Longer run for projection check
 # Objective and Constraints
 if run_mode == 1:
@@ -56,8 +56,8 @@ elif run_mode == 3:
 # =================================
 # ------- NN Hyperparameters ------
 prob.opt.nn_params.use_tounn_logic = True
-prob.opt.nn_params.hidden_dim = 20
-prob.opt.nn_params.num_layers = 5
+prob.opt.nn_params.hidden_dim = 32
+prob.opt.nn_params.num_layers = 4
 prob.opt.nn_params.vol_penal_min = 1
 prob.opt.nn_params.vol_penal_max = 20
 prob.opt.nn_params.activation = 'ReLU'

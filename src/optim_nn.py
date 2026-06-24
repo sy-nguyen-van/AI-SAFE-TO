@@ -398,7 +398,8 @@ class Optimizer_Neural:
             else:
                 torch.nn.utils.clip_grad_norm_(self.net.parameters(), max_norm=1.0)
             self.optimizer.step()
-            self.scheduler.step()       # optional — could update every 20 iters
+            if not getattr(opt.nn_params, 'use_tounn_logic', False):
+                self.scheduler.step()       # optional — could update every 20 iters
             
             # TOuNN penalization continuation update
             if getattr(opt.nn_params, 'use_tounn_logic', False):
