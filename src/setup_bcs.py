@@ -264,3 +264,240 @@ def setup_cantilever3d_bcs(problem):
         
     fe.F = F
     fe.n_loads = 1
+
+
+def setup_midcantilever2d_bcs(problem):
+    """
+    Sets up BCs for 2D Midcantilever matching TOuNN.
+    """
+    fe = problem.fe
+    coords = fe.coords
+    from .struct_prob import BC_Struct
+    fe.BC = BC_Struct()
+    
+    x = coords[:, 0]
+    y = coords[:, 1]
+    
+    L = np.max(x)
+    H = np.max(y)
+    tol = 1e-6
+    
+    # Fixed at x = 0
+    fixed_region = np.where(x < tol)[0]
+    n_disp_pts = len(fixed_region)
+    
+    bc_nodes = np.tile(fixed_region, 2)
+    bc_dirs = np.concatenate([np.ones(n_disp_pts, dtype=int), 2 * np.ones(n_disp_pts, dtype=int)])
+    bc_mags = np.zeros(2 * n_disp_pts)
+    
+    fe.BC.n_pre_disp_dofs = len(bc_nodes)
+    fe.BC.disp_node = bc_nodes
+    fe.BC.disp_dof = bc_dirs
+    fe.BC.disp_value = bc_mags
+    
+    # Load at x = L, y = H/2
+    fe.nloads = 1
+    load_region = np.where((x > L - tol) & (np.abs(y - H/2.0) < tol))[0]
+    
+    if len(load_region) > 0:
+        n_force = len(load_region)
+        fe.BC.n_pre_force_dofs = n_force
+        fe.BC.force_node = load_region
+        fe.BC.force_dof = np.full(n_force, 2, dtype=int)
+        fe.BC.force_value = np.full(n_force, -1.0 / n_force)
+        fe.BC.force_id = np.full(n_force, 1, dtype=int)
+    else:
+        fe.BC.n_pre_force_dofs = 0
+        fe.BC.force_node = np.array([], dtype=int)
+        fe.BC.force_dof = np.array([], dtype=int)
+        fe.BC.force_value = np.array([])
+        fe.BC.force_id = np.array([], dtype=int)
+        print("Warning: No load nodes found for Midcantilever.")
+        
+    n_dof = fe.n_node * fe.dim
+    F = np.zeros(n_dof)
+    if fe.BC.n_pre_force_dofs > 0:
+        np.add.at(F, 2 * fe.BC.force_node + (fe.BC.force_dof - 1), fe.BC.force_value)
+    fe.F = F
+    fe.n_loads = 1
+
+def setup_mbb2d_bcs(problem):
+    """
+    Sets up BCs for 2D MBB Beam (half-domain) matching TOuNN.
+    """
+    fe = problem.fe
+    coords = fe.coords
+    from .struct_prob import BC_Struct
+    fe.BC = BC_Struct()
+    
+    x = coords[:, 0]
+    y = coords[:, 1]
+    
+    L = np.max(x)
+    H = np.max(y)
+    tol = 1e-6
+    
+    # Symmetry at x = 0 (fixed x), Roller at x = L, y = 0 (fixed y)
+    sym_region = np.where(x < tol)[0]
+    roller_region = np.where((x > L - tol) & (y < tol))[0]
+    
+    n_sym = len(sym_region)
+    n_roller = len(roller_region)
+    
+    bc_nodes = np.concatenate([sym_region, roller_region])
+    bc_dirs = np.concatenate([np.ones(n_sym, dtype=int), 2 * np.ones(n_roller, dtype=int)])
+    bc_mags = np.zeros(n_sym + n_roller)
+    
+    fe.BC.n_pre_disp_dofs = len(bc_nodes)
+    fe.BC.disp_node = bc_nodes
+    fe.BC.disp_dof = bc_dirs
+    fe.BC.disp_value = bc_mags
+    
+    # Load at x = 0, y = H
+    fe.nloads = 1
+    load_region = np.where((x < tol) & (y > H - tol))[0]
+    
+    if len(load_region) > 0:
+        n_force = len(load_region)
+        fe.BC.n_pre_force_dofs = n_force
+        fe.BC.force_node = load_region
+        fe.BC.force_dof = np.full(n_force, 2, dtype=int)
+        fe.BC.force_value = np.full(n_force, -1.0 / n_force)
+        fe.BC.force_id = np.full(n_force, 1, dtype=int)
+    else:
+        fe.BC.n_pre_force_dofs = 0
+        fe.BC.force_node = np.array([], dtype=int)
+        fe.BC.force_dof = np.array([], dtype=int)
+        fe.BC.force_value = np.array([])
+        fe.BC.force_id = np.array([], dtype=int)
+        print("Warning: No load nodes found for MBB.")
+        
+    n_dof = fe.n_node * fe.dim
+    F = np.zeros(n_dof)
+    if fe.BC.n_pre_force_dofs > 0:
+        np.add.at(F, 2 * fe.BC.force_node + (fe.BC.force_dof - 1), fe.BC.force_value)
+    fe.F = F
+    fe.n_loads = 1
+
+def setup_michell2d_bcs(problem):
+    """
+    Sets up BCs for 2D Michell Beam matching TOuNN.
+    """
+    fe = problem.fe
+    coords = fe.coords
+    from .struct_prob import BC_Struct
+    fe.BC = BC_Struct()
+    
+    x = coords[:, 0]
+    y = coords[:, 1]
+    
+    L = np.max(x)
+    H = np.max(y)
+    tol = 1e-6
+    
+    # Pin at x=0, y=0 (fixed x,y), Roller at x=L, y=0 (fixed y)
+    pin_region = np.where((x < tol) & (y < tol))[0]
+    roller_region = np.where((x > L - tol) & (y < tol))[0]
+    
+    n_pin = len(pin_region)
+    n_roller = len(roller_region)
+    
+    bc_nodes = np.concatenate([pin_region, pin_region, roller_region])
+    bc_dirs = np.concatenate([
+        np.ones(n_pin, dtype=int), 2 * np.ones(n_pin, dtype=int),
+        2 * np.ones(n_roller, dtype=int)
+    ])
+    bc_mags = np.zeros(len(bc_nodes))
+    
+    fe.BC.n_pre_disp_dofs = len(bc_nodes)
+    fe.BC.disp_node = bc_nodes
+    fe.BC.disp_dof = bc_dirs
+    fe.BC.disp_value = bc_mags
+    
+    # Load at x = L/2, y = 0
+    fe.nloads = 1
+    load_region = np.where((np.abs(x - L/2.0) < tol) & (y < tol))[0]
+    
+    if len(load_region) > 0:
+        n_force = len(load_region)
+        fe.BC.n_pre_force_dofs = n_force
+        fe.BC.force_node = load_region
+        fe.BC.force_dof = np.full(n_force, 2, dtype=int)
+        fe.BC.force_value = np.full(n_force, -1.0 / n_force)
+        fe.BC.force_id = np.full(n_force, 1, dtype=int)
+    else:
+        fe.BC.n_pre_force_dofs = 0
+        fe.BC.force_node = np.array([], dtype=int)
+        fe.BC.force_dof = np.array([], dtype=int)
+        fe.BC.force_value = np.array([])
+        fe.BC.force_id = np.array([], dtype=int)
+        print("Warning: No load nodes found for Michell.")
+        
+    n_dof = fe.n_node * fe.dim
+    F = np.zeros(n_dof)
+    if fe.BC.n_pre_force_dofs > 0:
+        np.add.at(F, 2 * fe.BC.force_node + (fe.BC.force_dof - 1), fe.BC.force_value)
+    fe.F = F
+    fe.n_loads = 1
+
+def setup_bridge2d_bcs(problem):
+    """
+    Sets up BCs for 2D Bridge (Distributed MBB) matching TOuNN.
+    """
+    fe = problem.fe
+    coords = fe.coords
+    from .struct_prob import BC_Struct
+    fe.BC = BC_Struct()
+    
+    x = coords[:, 0]
+    y = coords[:, 1]
+    
+    L = np.max(x)
+    H = np.max(y)
+    tol = 1e-6
+    
+    # Pin at x=0, y=0 (fixed x,y), Pin at x=L, y=0 (fixed x,y)
+    pin1_region = np.where((x < tol) & (y < tol))[0]
+    pin2_region = np.where((x > L - tol) & (y < tol))[0]
+    
+    n_pin1 = len(pin1_region)
+    n_pin2 = len(pin2_region)
+    
+    bc_nodes = np.concatenate([pin1_region, pin1_region, pin2_region, pin2_region])
+    bc_dirs = np.concatenate([
+        np.ones(n_pin1, dtype=int), 2 * np.ones(n_pin1, dtype=int),
+        np.ones(n_pin2, dtype=int), 2 * np.ones(n_pin2, dtype=int)
+    ])
+    bc_mags = np.zeros(len(bc_nodes))
+    
+    fe.BC.n_pre_disp_dofs = len(bc_nodes)
+    fe.BC.disp_node = bc_nodes
+    fe.BC.disp_dof = bc_dirs
+    fe.BC.disp_value = bc_mags
+    
+    # Distributed Load along top edge y = H
+    fe.nloads = 1
+    load_region = np.where(y > H - tol)[0]
+    
+    if len(load_region) > 0:
+        n_force = len(load_region)
+        fe.BC.n_pre_force_dofs = n_force
+        fe.BC.force_node = load_region
+        fe.BC.force_dof = np.full(n_force, 2, dtype=int)
+        fe.BC.force_value = np.full(n_force, -1.0 / n_force)
+        fe.BC.force_id = np.full(n_force, 1, dtype=int)
+    else:
+        fe.BC.n_pre_force_dofs = 0
+        fe.BC.force_node = np.array([], dtype=int)
+        fe.BC.force_dof = np.array([], dtype=int)
+        fe.BC.force_value = np.array([])
+        fe.BC.force_id = np.array([], dtype=int)
+        print("Warning: No load nodes found for Bridge.")
+        
+    n_dof = fe.n_node * fe.dim
+    F = np.zeros(n_dof)
+    if fe.BC.n_pre_force_dofs > 0:
+        np.add.at(F, 2 * fe.BC.force_node + (fe.BC.force_dof - 1), fe.BC.force_value)
+    fe.F = F
+    fe.n_loads = 1
+

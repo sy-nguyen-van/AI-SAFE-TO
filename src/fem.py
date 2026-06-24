@@ -51,6 +51,18 @@ class FEMSolver: # FEMSolver class
              elif bcs == 'setup_cantilever2d_bcs':
                   from .setup_bcs import setup_cantilever2d_bcs
                   setup_cantilever2d_bcs(self.problem)
+             elif bcs == 'setup_midcantilever2d_bcs':
+                  from .setup_bcs import setup_midcantilever2d_bcs
+                  setup_midcantilever2d_bcs(self.problem)
+             elif bcs == 'setup_mbb2d_bcs':
+                  from .setup_bcs import setup_mbb2d_bcs
+                  setup_mbb2d_bcs(self.problem)
+             elif bcs == 'setup_michell2d_bcs':
+                  from .setup_bcs import setup_michell2d_bcs
+                  setup_michell2d_bcs(self.problem)
+             elif bcs == 'setup_bridge2d_bcs':
+                  from .setup_bcs import setup_bridge2d_bcs
+                  setup_bridge2d_bcs(self.problem)
              else:
                   print(f"Warning: bcs_file '{bcs}' not recognized or actionable in init_FE.")
         
